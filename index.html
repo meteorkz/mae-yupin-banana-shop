@@ -938,12 +938,18 @@
 <div class="modal-backdrop" id="editOrderModal">
   <div class="modal-card" style="max-width:460px;">
     <h3>แก้ไขออเดอร์ <span id="editOrderCode"></span></h3>
-    <p>แก้ไขข้อมูลลูกค้า สถานะ หรือเลขพัสดุ — ไม่กระทบสต๊อกหรือรายการสินค้าที่สั่ง</p>
+    <p>แก้ไขข้อมูลลูกค้า วันที่ ราคาต่อชิ้น สถานะ หรือเลขพัสดุ — ไม่กระทบสต๊อกหรือจำนวนที่สั่ง (แก้ราคาไว้ใช้กรณีลูกค้าได้ส่วนลดพิเศษเฉพาะรายคน)</p>
     <form id="editOrderForm">
       <div class="field"><label for="editName">ชื่อผู้รับ</label><input id="editName" required></div>
       <div class="field"><label for="editPhone">เบอร์โทรศัพท์</label><input id="editPhone" required></div>
       <div class="field"><label for="editAddress">ที่อยู่จัดส่ง</label><textarea id="editAddress" rows="3" required></textarea></div>
       <div class="field"><label for="editNote">หมายเหตุ</label><input id="editNote"></div>
+      <div class="field"><label for="editCreatedAt">วันที่สั่งซื้อ</label><input type="datetime-local" id="editCreatedAt"></div>
+      <div class="field">
+        <label>รายการสินค้า & ราคา/ชิ้น</label>
+        <div id="editItemsList" style="display:flex;flex-direction:column;gap:6px;"></div>
+        <div style="text-align:right;font-size:.82rem;color:var(--ink-faint);margin-top:4px;">ยอดสินค้ารวมใหม่: <b id="editSubtotalPreview">—</b></div>
+      </div>
       <div class="field">
         <label for="editStatus">สถานะ</label>
         <select id="editStatus">
@@ -1076,7 +1082,7 @@
     products: [], cart: [], // cart: [{productId,name,price,qty}]
     orderCode: null, order: null, unsubOrder: null,
     unsubAdmin: null, unsubProducts: null, isAdmin: false,
-    printOrderCode: null, allOrders: [], editOrderCode: null, bestsellerId: null,
+    printOrderCode: null, allOrders: [], editOrderCode: null, editOrderItems: null, bestsellerId: null,
     range: { preset: '30d', from: null, to: null },
     reviewProductId: null, reviewRating: 5
   };
@@ -2140,15 +2146,63 @@
     }catch(err){ toast('ลบออเดอร์ไม่สำเร็จ'); }
   }
 
+  function dtLocalFromMs(ms){
+    var d = new Date(ms);
+    var p = function(n){ return String(n).padStart(2,'0'); };
+    return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes());
+  }
+  function msFromDtLocal(str){
+    var ms = new Date(str).getTime();
+    return isNaN(ms) ? Date.now() : ms;
+  }
+
+  function renderEditItems(items){
+    var wrap = $('editItemsList'); wrap.innerHTML = '';
+    items.forEach(function(it, idx){
+      var row = document.createElement('div');
+      row.className = 'cart-item-row';
+      row.innerHTML =
+        '<span class="ci-name">'+esc(it.name)+' ×'+it.qty+'</span>' +
+        '<input type="number" min="0" step="1" data-item-price="'+idx+'" value="'+it.price+'" style="width:90px;border:1px solid var(--line-strong);border-radius:8px;padding:6px 8px;background:var(--surface);color:var(--ink);text-align:right;">';
+      wrap.appendChild(row);
+    });
+    wrap.querySelectorAll('[data-item-price]').forEach(function(inp){
+      inp.addEventListener('input', updateEditSubtotalPreview);
+    });
+    updateEditSubtotalPreview();
+  }
+
+  function getEditItemsFromForm(baseItems){
+    return baseItems.map(function(it, idx){
+      var inp = document.querySelector('[data-item-price="'+idx+'"]');
+      var price = Math.max(0, Number(inp && inp.value) || 0);
+      return Object.assign({}, it, { price: price });
+    });
+  }
+
+  function updateEditSubtotalPreview(){
+    var sum = 0;
+    document.querySelectorAll('[data-item-price]').forEach(function(inp){
+      var row = inp.closest('.cart-item-row');
+      var qtyMatch = row.querySelector('.ci-name').textContent.match(/×(\d+)$/);
+      var qty = qtyMatch ? Number(qtyMatch[1]) : 1;
+      sum += (Number(inp.value) || 0) * qty;
+    });
+    $('editSubtotalPreview').textContent = baht(sum);
+  }
+
   function openEditOrder(code){
     var order = state.allOrders.find(function(o){ return o.code === code; });
     if (!order) return;
     state.editOrderCode = code;
+    state.editOrderItems = order.items;
     $('editOrderCode').textContent = code;
     $('editName').value = order.customer.name;
     $('editPhone').value = order.customer.phone;
     $('editAddress').value = order.customer.address;
     $('editNote').value = order.customer.note || '';
+    $('editCreatedAt').value = dtLocalFromMs(order.createdAt);
+    renderEditItems(order.items);
     $('editStatus').value = order.status;
     $('editCarrier').value = (order.tracking && order.tracking.carrier) || '';
     $('editTracking').value = (order.tracking && order.tracking.trackingNumber) || '';
@@ -2161,11 +2215,17 @@
     if (!code) return;
     var carrier = $('editCarrier').value;
     var trackingNumber = $('editTracking').value.trim();
+    var order = state.allOrders.find(function(o){ return o.code === code; });
+    var items = getEditItemsFromForm(state.editOrderItems || (order && order.items) || []);
+    var subtotal = items.reduce(function(sum, it){ return sum + it.price * it.qty; }, 0);
+    var shipping = (order && order.shipping) || 0;
     var payload = {
       customer: {
         name: $('editName').value.trim(), phone: $('editPhone').value.trim(),
         address: $('editAddress').value.trim(), note: $('editNote').value.trim()
       },
+      createdAt: msFromDtLocal($('editCreatedAt').value),
+      items: items, subtotal: subtotal, shipping: shipping, total: subtotal + shipping,
       status: $('editStatus').value,
       tracking: (carrier && trackingNumber) ? { carrier: carrier, trackingNumber: trackingNumber, updatedAt: Date.now() } : null,
       updatedAt: Date.now()
