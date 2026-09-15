@@ -1183,24 +1183,24 @@
   }
 
   /* ---------------- flavors (products) ---------------- */
+  var productsLastJson = null;
+  async function pollProducts(force){
+    try{
+      var products = await apiCall('getProducts');
+      var json = JSON.stringify(products);
+      if (!force && json === productsLastJson) return; // ไม่มีอะไรเปลี่ยน — ข้าม re-render กันเผลอลบข้อความที่แอดมินพิมพ์ค้างอยู่ในฟอร์ม
+      productsLastJson = json;
+      state.products = products;
+      renderFlavorGrid();
+      renderGallery();
+      renderHeroRating();
+      renderTestimonials();
+      if (state.isAdmin) renderFlavorManager();
+    }catch(err){ toast('โหลดรายการสินค้าไม่สำเร็จ'); }
+  }
   function subscribeProducts(){
-    var lastJson = null;
-    async function poll(){
-      try{
-        var products = await apiCall('getProducts');
-        var json = JSON.stringify(products);
-        if (json === lastJson) return; // ไม่มีอะไรเปลี่ยน — ข้าม re-render กันเผลอลบข้อความที่แอดมินพิมพ์ค้างอยู่ในฟอร์ม
-        lastJson = json;
-        state.products = products;
-        renderFlavorGrid();
-        renderGallery();
-        renderHeroRating();
-        renderTestimonials();
-        if (state.isAdmin) renderFlavorManager();
-      }catch(err){ toast('โหลดรายการสินค้าไม่สำเร็จ'); }
-    }
-    poll();
-    var timer = setInterval(poll, 30000);
+    pollProducts(true);
+    var timer = setInterval(function(){ pollProducts(false); }, 30000);
     return function(){ clearInterval(timer); };
   }
 
@@ -1755,6 +1755,7 @@
     try{
       await apiCall('updateProduct', { pin: state.adminPin, id: id, fields: data });
       toast('บันทึกรสชาติแล้ว');
+      pollProducts(true);
     }catch(err){ toast('บันทึกไม่สำเร็จ'); }
   }
 
@@ -1762,6 +1763,7 @@
     try{
       await apiCall('deleteProduct', { pin: state.adminPin, id: id });
       toast('ลบรสชาติแล้ว');
+      pollProducts(true);
     }catch(err){ toast('ลบไม่สำเร็จ'); }
   }
 
@@ -1771,6 +1773,7 @@
       var base64 = await fileToBase64(file);
       await apiCall('uploadProductImage', { pin: state.adminPin, id: id, base64: base64, mime: file.type, filename: file.name });
       toast('อัปเดตรูปสินค้าแล้ว');
+      pollProducts(true);
     }catch(err){ toast('อัปโหลดรูปไม่สำเร็จ'); }
   }
 
@@ -1794,6 +1797,7 @@
       $('addFlavorImgPreview').innerHTML = FM_PLACEHOLDER_HTML + '<input type="file" name="image" accept="image/*" id="addFlavorImgInput" class="visually-hidden">';
       $('addFlavorImgInput').addEventListener('change', previewAddFlavorImg);
       toast('เพิ่มรสชาติ "'+name+'" แล้ว');
+      pollProducts(true);
     }catch(err){ toast('เพิ่มรสชาติไม่สำเร็จ'); }
   }
 
@@ -1806,22 +1810,23 @@
     $('addFlavorImgInput').addEventListener('change', previewAddFlavorImg);
   }
 
+  var adminOrdersLastJson = null;
+  async function pollAdminOrders(force){
+    var orders;
+    try{ orders = await apiCall('getOrders', { pin: state.adminPin }); }catch(err){ toast('โหลดออเดอร์ไม่สำเร็จ'); return; }
+    var json = JSON.stringify(orders);
+    if (!force && json === adminOrdersLastJson) return; // ไม่มีอะไรเปลี่ยน — ข้าม re-render กันเผลอลบเลขพัสดุ/ค่าที่แอดมินพิมพ์ค้างอยู่ในฟอร์ม
+    adminOrdersLastJson = json;
+    state.allOrders = orders;
+    renderAdminBoard(orders);
+    renderHistory();
+    renderInsights();
+  }
+
   function subscribeAdmin(){
     if (state.unsubAdmin) state.unsubAdmin();
-    var lastJson = null;
-    async function poll(){
-      var orders;
-      try{ orders = await apiCall('getOrders', { pin: state.adminPin }); }catch(err){ toast('โหลดออเดอร์ไม่สำเร็จ'); return; }
-      var json = JSON.stringify(orders);
-      if (json === lastJson) return; // ไม่มีอะไรเปลี่ยน — ข้าม re-render กันเผลอลบเลขพัสดุ/ค่าที่แอดมินพิมพ์ค้างอยู่ในฟอร์ม
-      lastJson = json;
-      state.allOrders = orders;
-      renderAdminBoard(orders);
-      renderHistory();
-      renderInsights();
-    }
-    poll();
-    var timer = setInterval(poll, 7000);
+    pollAdminOrders(true);
+    var timer = setInterval(function(){ pollAdminOrders(false); }, 7000);
     state.unsubAdmin = function(){ clearInterval(timer); };
   }
 
@@ -2143,6 +2148,7 @@
     try{
       await apiCall('deleteOrder', { pin: state.adminPin, code: code });
       toast('ลบออเดอร์ ' + code + ' แล้ว');
+      pollAdminOrders(true);
     }catch(err){ toast('ลบออเดอร์ไม่สำเร็จ'); }
   }
 
@@ -2234,6 +2240,7 @@
       await apiCall('submitEditOrder', { pin: state.adminPin, code: code, payload: payload });
       toast('บันทึกการแก้ไขออเดอร์ ' + code + ' แล้ว');
       $('editOrderModal').classList.remove('is-open');
+      pollAdminOrders(true);
     }catch(err){ toast('บันทึกไม่สำเร็จ'); }
   }
 
@@ -2315,6 +2322,7 @@
     try{
       await apiCall('adminConfirm', { pin: state.adminPin, code: code });
       toast('ยืนยันออเดอร์ ' + code + ' และตัดสต๊อกแล้ว (ส่ง SMS/LINE แจ้งลูกค้า — จำลอง)');
+      pollAdminOrders(true);
     }catch(err){ toast('ยืนยันออเดอร์ไม่สำเร็จ'); }
   }
 
@@ -2335,6 +2343,7 @@
     try{
       await apiCall('markPacked', { pin: state.adminPin, code: state.printOrderCode });
       toast('แพ็กเสร็จแล้ว ย้ายไปขั้นตอนอัปเดตพัสดุ');
+      pollAdminOrders(true);
     }catch(err){ toast('อัปเดตสถานะไม่สำเร็จ'); }
     state.printOrderCode = null;
     $('printModal').classList.remove('is-open');
@@ -2345,6 +2354,7 @@
     try{
       await apiCall('adminSubmitTracking', { pin: state.adminPin, code: code, carrier: carrier, trackingNumber: trackingNumber.trim() });
       toast('อัปเดตเลขพัสดุแล้ว (ส่ง SMS/LINE แจ้งลูกค้า — จำลอง)');
+      pollAdminOrders(true);
     }catch(err){ toast('อัปเดตเลขพัสดุไม่สำเร็จ'); }
   }
 
@@ -2352,6 +2362,7 @@
     try{
       await apiCall('adminMarkDelivered', { pin: state.adminPin, code: code });
       toast('ปิดออเดอร์ ' + code + ' เรียบร้อย');
+      pollAdminOrders(true);
     }catch(err){}
   }
 
